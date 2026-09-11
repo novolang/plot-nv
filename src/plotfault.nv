@@ -1,0 +1,73 @@
+// plotfault.nv — what building or rendering a figure can go wrong on.
+//
+// SHORT ON PURPOSE.  Almost nothing about a plot is an error: an empty
+// series draws nothing, a range with one point in it gets a default
+// width, a legend with no entries is not drawn.  A library that refused
+// those would be a library a notebook cell could not survive.  What IS
+// an error is a figure whose numbers cannot mean anything — a log axis
+// over a range that includes zero, two series of different lengths — and
+// there are five of those.
+//
+// NO EFFECTS.
+
+// What building or rendering a figure can go wrong on.
+//
+// ```novo
+// use plotfault
+//
+// fn main() [io]
+//     println(plotfault.summary(PlotEmptyFigure))
+// ```
+pub enum PlotFault
+    // The x and y data of a series are not the same length.  The one
+    // mistake that has no sensible partial answer: a point needs both
+    // coordinates, and silently truncating to the shorter list would
+    // draw a chart that is missing data nobody was told about.
+    PlotLengthMismatch(series: Str, xs: Int, ys: Int)
+    // A logarithmic axis over a range that includes zero or a negative
+    // number.  `PlotSymlog` is the scale for data that crosses zero, and
+    // the message says so.
+    PlotLogRangeInvalid(axis: Str, min: Float, max: Float)
+    // A figure with no axes in it, or an axes whose fractional
+    // rectangle has no area.
+    PlotEmptyFigure
+    // A raster target asked for at a size that is not positive, or
+    // large enough that the buffer would not fit.
+    PlotBadRasterSize(width: Int, height: Int)
+    // A histogram bin rule that produces no bins: a count that is not
+    // positive, a width that is not positive, or a rule that needs a
+    // spread and got data whose values are all the same.
+    PlotBadBinning(series: Str, reason: Str)
+
+// The rule every `PlotFault` is printed by: name the series or axis, and
+// say which of its numbers is the problem.
+//
+// `Result<T, E>` requires `E: Error` (SPEC § 3.4), so this impl is what
+// makes every fallible signature in the package spellable.
+impl Error for PlotFault
+    fn message(self) -> Str
+        match self
+            PlotLengthMismatch(s, xs, ys)   =>
+                "series '${s}' has ${xs} x values and ${ys} y values"
+            PlotLogRangeInvalid(ax, lo, hi) =>
+                "the ${ax} axis is logarithmic over ${lo}..${hi}, which includes zero — use PlotSymlog for data that crosses it"
+            PlotEmptyFigure                 =>
+                "the figure has no axes with any area to draw in"
+            PlotBadRasterSize(w, h)         =>
+                "a raster of ${w} by ${h} pixels cannot be allocated"
+            PlotBadBinning(s, why)          =>
+                "series '${s}' cannot be binned: ${why}"
+
+// A one-line summary a notebook cell can show above the failed plot.
+//
+// Shorter than `message` and with no numbers in it, for the case where
+// the cell shows the detail underneath.
+//
+// ```novo
+// use plotfault
+//
+// fn main() [io]
+//     println(plotfault.summary(PlotEmptyFigure))
+// ```
+pub fn summary(f: PlotFault) -> Str
+    todo("plot-nv.plotfault.summary")

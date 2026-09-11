@@ -1,0 +1,412 @@
+// plotaxis.nv — an axis: a scale, a range, and where its ticks go.
+//
+// TICK PLACEMENT IS A NAMED ALGORITHM, and that is the point of this
+// module.  "Pick some round numbers" is where every plotting library
+// quietly differs from every other, and it is the thing a reader of a
+// chart notices first: axis labels at 0, 2.5, 5, 7.5, 10 read well and
+// labels at 0, 2.857, 5.714 do not.  So the rule is a VALUE the caller
+// can name, compare and test, rather than a heuristic buried in a
+// renderer.
+//
+// THE DEFAULT IS HECKBERT'S.  `PlotTicksNice` is the loose-label
+// algorithm from Paul Heckbert's "Nice Numbers for Graph Labels"
+// (Graphics Gems I, 1990): take the range, divide by the number of
+// ticks wanted, round that spacing UP to the nearest 1, 2, 5 or 10 times
+// a power of ten, and place ticks at multiples of it from the first
+// multiple at or below the minimum.  Twenty lines, no tables, and the
+// answer is a number a person would have chosen.  It is what gnuplot,
+// plotters and matplotlib's `MaxNLocator` all do a version of.
+//
+// WHAT IS DELIBERATELY NOT HERE: Talbot, Lin and Hanrahan's extended
+// Wilkinson algorithm, which scores candidate tick sets on simplicity,
+// coverage, density and legibility and picks the best. It produces
+// better axes than Heckbert on awkward ranges and it costs a search over
+// a candidate space. It belongs here eventually, as a fifth variant
+// named after it — which is the reason `PlotTickRule` is an enum and
+// not a boolean.
+//
+// THE TARGET COUNT IS A TARGET.  `PlotTicksNice(6)` asks for about six
+// ticks and takes whatever the rounding gives — usually five to seven.
+// A caller who needs exactly n has `PlotTicksCount(n)` and gets ugly
+// numbers, which is the honest trade.
+//
+// NO EFFECTS.
+
+// How data values are spaced along an axis.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.position(PlotLinear, 5.0, 0.0, 10.0)}")
+// ```
+pub enum PlotScale
+    // Equal data differences take equal distances.
+    PlotLinear
+    // Equal RATIOS take equal distances.  Refuses a range that includes
+    // zero — `PlotLogRangeInvalid` — because the logarithm of zero is
+    // not a number and a plot that silently clamped it would lie about
+    // where its points are.
+    PlotLog(base: Float)
+    // Logarithmic outside a band around zero and linear inside it, so
+    // data that crosses zero can still be plotted over many decades.
+    // matplotlib's `symlog`, and the answer to the refusal above.
+    PlotSymlog(base: Float, linear_threshold: Float)
+
+// How ticks are chosen along an axis.
+//
+// ```novo
+// use plotaxis
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotaxis.ticks_for(PlotLinear, PlotTicksNice(6), 0.0, 10.0))}")
+// ```
+pub enum PlotTickRule
+    // Heckbert's 1-2-5 rule, aiming for about `target` ticks.  The
+    // default, and the one that produces numbers a person would have
+    // chosen.
+    PlotTicksNice(target: Int)
+    // Exactly `n` ticks, evenly spaced across the range.  Round numbers
+    // are not promised, and usually do not happen — for a caller who
+    // needs a fixed count more than a readable label.
+    PlotTicksCount(n: Int)
+    // Ticks every `step`, aligned so that one falls on `origin`.  For a
+    // quantity whose natural spacing the caller knows: months, bytes,
+    // degrees.
+    PlotTicksStep(step: Float, origin: Float)
+    // Exactly these values.  The escape hatch, and the one a caller
+    // reaches for when the axis is categorical or the labels come from
+    // somewhere else.
+    PlotTicksAt(values: [Float])
+    // One major tick per decade of `base`, with minor ticks at the
+    // intermediate multiples.  The rule a log axis wants; using
+    // `PlotTicksNice` on one gives evenly spaced numbers at unevenly
+    // spaced positions, which is the classic wrong log axis.
+    PlotTicksDecade(base: Float)
+
+// How a tick's number is written.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.format_value(PlotFormatFixed(2), 3.14159))
+// ```
+pub enum PlotNumberFormat
+    // Enough digits to tell the ticks apart and no more, with an
+    // exponent only when the numbers are too large or small to read.
+    // Chosen from the tick SET rather than per value, so an axis does
+    // not mix `1` with `1.50`.
+    PlotFormatAuto
+    // Always this many digits past the point.
+    PlotFormatFixed(decimals: Int)
+    // Always scientific: one digit, then `decimals`, then the exponent.
+    PlotFormatSci(decimals: Int)
+    // The value times a hundred, with a per-cent sign.
+    PlotFormatPercent(decimals: Int)
+    // A thousands separator and this many decimals — for an axis a
+    // person reads as a quantity rather than a measurement.
+    PlotFormatGrouped(decimals: Int)
+
+// One tick: where it is, what it says, and whether it is a major one.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.tick(1.0, "1", true).label)
+// ```
+pub struct PlotTick
+    // The tick's position, as a DATA value.  Turning it into a
+    // coordinate is `position`'s job, and keeping the two apart is what
+    // lets the same tick set serve an SVG and a raster at different
+    // sizes.
+    value: Float
+    // What is written beside it.  Empty on a minor tick.
+    label: Str
+    // Whether it carries a label and a full-length mark.  A minor tick
+    // is a short mark and no label, and is what a log axis puts at 2, 3
+    // and so on between its decades.
+    major: Bool
+
+// One axis of a plot.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.linear("time (s)").label)
+// ```
+pub struct PlotAxis
+    // What the axis measures, written alongside it.  Empty draws none.
+    label: Str
+    // How values are spaced.
+    scale: PlotScale
+    // Where the ticks go.
+    ticks: PlotTickRule
+    // How a tick's number is written.
+    format: PlotNumberFormat
+    // The low end of the data range.  When `min >= max` the range is
+    // AUTOMATIC: the renderer takes it from the series and pads it to
+    // the next tick, which is what a caller who set neither wants.
+    min: Float
+    // The high end.
+    max: Float
+    // Whether a line is drawn at each major tick, across the plot area.
+    grid: Bool
+    // Whether the axis line itself is drawn.
+    line: Bool
+
+// A linear axis with automatic range, nice ticks and automatic number
+// format.
+//
+// The one almost every plot uses, so it is one call rather than eight
+// fields.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.linear("x").label)
+// ```
+pub fn linear(label: Str) -> PlotAxis
+    todo("plot-nv.plotaxis.linear")
+
+// A base-10 logarithmic axis, with decade ticks.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.log10("count").label)
+// ```
+pub fn log10(label: Str) -> PlotAxis
+    todo("plot-nv.plotaxis.log10")
+
+// A categorical axis: one tick per label, at 0, 1, 2 and so on.
+//
+// What a bar chart's label axis is.  The scale is linear and the ticks
+// are `PlotTicksAt` on the integers, which means a caller can mix bars
+// and a line on the same axes without a second coordinate system.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.categorical("region", ["north", "south"]).label)
+// ```
+pub fn categorical(label: Str, categories: [Str]) -> PlotAxis
+    todo("plot-nv.plotaxis.categorical")
+
+// The same axis with a fixed range instead of an automatic one.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.with_range(plotaxis.linear("x"), 0.0, 100.0).max}")
+// ```
+pub fn with_range(a: PlotAxis, min: Float, max: Float) -> PlotAxis
+    todo("plot-nv.plotaxis.with_range")
+
+// The same axis with a different tick rule.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.with_ticks(plotaxis.linear("x"), PlotTicksCount(4)).label)
+// ```
+pub fn with_ticks(a: PlotAxis, rule: PlotTickRule) -> PlotAxis
+    todo("plot-nv.plotaxis.with_ticks")
+
+// The same axis with a different number format.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.with_format(plotaxis.linear("x"), PlotFormatFixed(1)).label)
+// ```
+pub fn with_format(a: PlotAxis, f: PlotNumberFormat) -> PlotAxis
+    todo("plot-nv.plotaxis.with_format")
+
+// The same axis with the grid on or off.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.with_grid(plotaxis.linear("x"), true).grid}")
+// ```
+pub fn with_grid(a: PlotAxis, grid: Bool) -> PlotAxis
+    todo("plot-nv.plotaxis.with_grid")
+
+// Whether the axis takes its range from the data rather than being told
+// it.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.is_auto_range(plotaxis.linear("x"))}")
+// ```
+pub fn is_auto_range(a: PlotAxis) -> Bool
+    todo("plot-nv.plotaxis.is_auto_range")
+
+// A range that covers the data and ends on round numbers.
+//
+// What an automatic axis resolves to: the data's own extent, widened to
+// the nearest tick under the axis's rule, so the outermost points are
+// not on the frame.  A data range with no extent at all — one point, or
+// many identical ones — is given a unit width around the value, because
+// an axis from 5 to 5 has no positions in it.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.padded_range(plotaxis.linear("x"), 0.3, 9.7).max}")
+// ```
+pub fn padded_range(a: PlotAxis, data_min: Float, data_max: Float) -> PlotAxis
+    todo("plot-nv.plotaxis.padded_range")
+
+// The ticks a scale and a rule put on a range.
+//
+// The whole of the tick algorithm, as one function over four values —
+// so a caller can test the placement without building a figure, and so
+// two backends cannot place them differently.
+//
+// ```novo
+// use plotaxis
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotaxis.ticks_for(PlotLinear, PlotTicksNice(6), 0.0, 10.0))}")
+// ```
+pub fn ticks_for(scale: PlotScale, rule: PlotTickRule, min: Float, max: Float) -> [PlotTick]
+    todo("plot-nv.plotaxis.ticks_for")
+
+// The ticks an axis puts on its own range, labelled by its own format.
+//
+// `ticks_for` plus the labelling, which is the call a renderer makes.
+// An axis whose range is still automatic answers an empty list: there is
+// no range to place ticks on until `padded_range` has resolved it.
+//
+// ```novo
+// use plotaxis
+// use std.list
+//
+// fn main() [io]
+//     let a = plotaxis.with_range(plotaxis.linear("x"), 0.0, 10.0)
+//     println("${list.len(plotaxis.ticks_of(a))}")
+// ```
+pub fn ticks_of(a: PlotAxis) -> [PlotTick]
+    todo("plot-nv.plotaxis.ticks_of")
+
+// A tick from its parts.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.tick(1.0, "1", true).label)
+// ```
+pub fn tick(value: Float, label: Str, major: Bool) -> PlotTick
+    todo("plot-nv.plotaxis.tick")
+
+// Where a data value sits along the axis, as a fraction: 0.0 at `min`
+// and 1.0 at `max`.
+//
+// THE ONE FUNCTION EVERY BACKEND SHARES.  A fraction rather than a
+// coordinate, because the fraction does not know how big the drawing is
+// — which is what lets the same figure render at 640 pixels and at 1920
+// with every point in the same relative place.  Values outside the range
+// give fractions outside `0.0 ..= 1.0`; clipping is the renderer's job.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.position(PlotLinear, 5.0, 0.0, 10.0)}")
+// ```
+pub fn position(scale: PlotScale, value: Float, min: Float, max: Float) -> Float
+    todo("plot-nv.plotaxis.position")
+
+// The data value at a fraction along the axis.  The inverse of
+// `position`.
+//
+// What a notebook's hover readout needs: a pixel came in, a data value
+// has to come out.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.value_at(PlotLinear, 0.5, 0.0, 10.0)}")
+// ```
+pub fn value_at(scale: PlotScale, fraction: Float, min: Float, max: Float) -> Float
+    todo("plot-nv.plotaxis.value_at")
+
+// Whether a scale can represent this range at all.
+//
+// False exactly when a logarithmic scale's range includes zero.  Asked
+// before rendering, so the fault names the axis rather than appearing as
+// a point at infinity.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.range_is_valid(PlotLog(10.0), 0.0, 100.0)}")
+// ```
+pub fn range_is_valid(scale: PlotScale, min: Float, max: Float) -> Bool
+    todo("plot-nv.plotaxis.range_is_valid")
+
+// A number written in a format.
+//
+// Public because a legend entry, a title and a hover readout all have to
+// spell a number the same way the ticks do.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.format_value(PlotFormatFixed(2), 3.14159))
+// ```
+pub fn format_value(f: PlotNumberFormat, value: Float) -> Str
+    todo("plot-nv.plotaxis.format_value")
+
+// The format `PlotFormatAuto` resolves to for a given tick set.
+//
+// Chosen from the whole SET rather than per value, which is why it takes
+// a list: an axis that wrote `1`, `1.5`, `2` would be right about each
+// number and wrong as an axis, and one that wrote `1.0`, `1.5`, `2.0` is
+// what a reader expects.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println(plotaxis.format_value(plotaxis.auto_format([0.0, 0.5, 1.0]), 0.5))
+// ```
+pub fn auto_format(values: [Float]) -> PlotNumberFormat
+    todo("plot-nv.plotaxis.auto_format")
+
+// Heckbert's nice number at or above `v`, as `1`, `2`, `5` or `10` times
+// a power of ten.
+//
+// The primitive the default rule is built from, public because it is the
+// thing to test: an implementation that gets this right gets every
+// linear axis right, and one that gets it wrong is visibly wrong at
+// every scale.
+//
+// ```novo
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotaxis.nice_number(3.7, true)}")
+// ```
+pub fn nice_number(v: Float, round_up: Bool) -> Float
+    todo("plot-nv.plotaxis.nice_number")

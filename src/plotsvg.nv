@@ -1,0 +1,133 @@
+// plotsvg.nv — the first backend: an op list into an SVG document.
+//
+// A READER OF `plotdraw`'s LIST, and nothing more.  This module has no
+// layout, no scales and no tick placement in it — those all happened in
+// `plotdraw.render`, and this is twelve match arms turning operations
+// into `svgdoc` nodes.  That is the shape every backend has, and it is
+// the evidence for the decision `plotdraw`'s header argues: a second
+// backend is this file again, against a different drawing API.
+//
+// THE ONE THING THIS MODULE DECIDES is how a `PlotBeginGroup` becomes an
+// SVG `<g id>`.  It does, with the id passed straight through — so the
+// legend is `<g id="legend">` in the output and a browser, a stylesheet
+// or a bit of JavaScript can find it.  A backend without groups ignores
+// them; this one is the reason they exist.
+//
+// TEXT IS A `<text>` ELEMENT with a family this module chooses, because
+// a `PlotDrawText` op carries a size and no family — the op list does
+// not know about fonts, and SVG's answer to a family it cannot resolve
+// is a sensible default anyway.  `to_svg_with_font` is how a caller
+// names one.
+//
+// NO EFFECTS.
+
+use srgb
+use svgdoc
+use svgstyle
+use plotfigure
+use plotdraw
+
+// A whole figure as an SVG document.
+//
+// `render` and then `ops_to_svg`, which is the call a notebook makes.
+//
+// ```novo
+// use plotsvg
+// use plotfigure
+// use svgdoc
+//
+// fn main() [io]
+//     match plotsvg.to_svg(plotfigure.single(640.0, 480.0, []))
+//         Ok(d)  => println("${svgdoc.child_count_of(d)}")
+//         Err(_) => println("refused")
+// ```
+pub fn to_svg(f: PlotFigure) -> Result<SvgDocument, PlotFault>
+    todo("plot-nv.plotsvg.to_svg")
+
+// A whole figure as SVG text.
+//
+// The two calls a notebook actually makes, as one: render, convert,
+// write.  The `SvgWriteStyle` is svg-nv's, so a caller choosing between
+// a readable document and a small one chooses it the same way
+// everywhere.
+//
+// ```novo
+// use plotsvg
+// use plotfigure
+// use svgwrite
+//
+// fn main() [io]
+//     match plotsvg.to_svg_string(plotfigure.single(640.0, 480.0, []), svgwrite.minimal())
+//         Ok(s)  => println("${str.len(s)}")
+//         Err(_) => println("refused")
+// ```
+pub fn to_svg_string(f: PlotFigure, style: SvgWriteStyle) -> Result<Str, PlotFault>
+    todo("plot-nv.plotsvg.to_svg_string")
+
+// An op list as an SVG document of a given size.
+//
+// The backend proper.  Takes the ops rather than the figure, which is
+// what lets a caller render once and write twice, or render a series on
+// its own and drop the result into a document it is building itself.
+//
+// ```novo
+// use plotsvg
+// use srgb
+// use svgdoc
+//
+// fn main() [io]
+//     let d = plotsvg.ops_to_svg([], 640.0, 480.0, srgb.transparent())
+//     println("${svgdoc.child_count_of(d)}")
+// ```
+pub fn ops_to_svg(ops: [PlotDrawOp], width: Float, height: Float, background: Srgba8) -> SvgDocument
+    todo("plot-nv.plotsvg.ops_to_svg")
+
+// The same, with the font every text run is set in.
+//
+// ```novo
+// use plotsvg
+// use srgb
+// use svgstyle
+// use svgdoc
+//
+// fn main() [io]
+//     let f = svgstyle.font("monospace", 12.0, 400, false)
+//     println("${svgdoc.child_count_of(plotsvg.ops_to_svg_with_font([], 10.0, 10.0, srgb.transparent(), f))}")
+// ```
+pub fn ops_to_svg_with_font(ops: [PlotDrawOp], width: Float, height: Float, background: Srgba8,
+                            font: SvgFontSpec) -> SvgDocument
+    todo("plot-nv.plotsvg.ops_to_svg_with_font")
+
+// One operation as the SVG nodes it draws.
+//
+// A LIST, because one op is sometimes two nodes — a dashed polyline that
+// a caller asked to be expanded, a marker that is a shape and an outline
+// — and sometimes none, for a group marker or a clip.  Public because
+// it is the unit a test checks and the unit a caller reuses when it is
+// assembling a document itself.
+//
+// ```novo
+// use plotsvg
+// use svgstyle
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotsvg.op_to_nodes(PlotEndGroup, svgstyle.default_font()))}")
+// ```
+pub fn op_to_nodes(op: PlotDrawOp, font: SvgFontSpec) -> [SvgNode]
+    todo("plot-nv.plotsvg.op_to_nodes")
+
+// This package's text anchor as svg-nv's.
+//
+// The three-line mapping the header mentions, public so a caller writing
+// its own SVG backend variant does not have to repeat it.
+//
+// ```novo
+// use plotsvg
+// use svgstyle
+//
+// fn main() [io]
+//     println(svgstyle.anchor_to_string(plotsvg.anchor_to_svg(PlotAnchorMiddle)))
+// ```
+pub fn anchor_to_svg(a: PlotAnchor) -> SvgTextAnchor
+    todo("plot-nv.plotsvg.anchor_to_svg")

@@ -1,0 +1,162 @@
+// plotraster.nv — the second backend: an op list into pixels.
+//
+// THE SAME SHAPE AS `plotsvg`: twelve match arms over the op list, with
+// no layout in them.  What differs is that pixels have to be filled
+// rather than described, which is the one piece of real work in this
+// package's rendering path.
+//
+// WHAT FILLS THEM.  A scanline rasteriser with analytic coverage: for
+// each row of pixels, find where the shape's edges cross it, and give
+// each pixel the fraction of its area the shape covers.  That is
+// stb_truetype's and tiny-skia's approach, it antialiases without
+// supersampling, and it is a few hundred lines — arithmetic over a
+// coverage buffer, with no allocation beyond the buffer and the active
+// edge list.  `raster-nv` is the plan's row for that work as a package
+// of its own (P2); until it lands, this module carries it, and when it
+// lands this module becomes a caller of it with NO CHANGE TO THIS
+// INTERFACE.  That is the reason to say it here: the signatures below
+// are the same either way.
+//
+// THE OUTPUT IS AN `image-nv` `Image`, NOT A FILE.  Encoding it is
+// png-nv's or qoi-nv's job and writing it is `image-io-nv`'s, and both
+// of those are a caller's decision — a notebook sending a chart over a
+// socket never writes one.  This package is `core` and produces a value.
+//
+// SCALE IS A MULTIPLIER, NOT A RE-LAYOUT.  A figure is in figure units;
+// `scale` turns them into pixels.  At 2.0 every coordinate doubles and
+// every stroke width doubles with it, so a chart rendered for a
+// high-density display is the same chart and not a differently
+// proportioned one.  It is matplotlib's `dpi` under a name that says
+// what it does.
+//
+// NO EFFECTS.  Filling a buffer this package owns is not one — the
+// `Image` is built and returned, never mutated in place.
+
+use srgb
+use image
+use plotfigure
+
+// A whole figure as a raster image.
+//
+// `render` and then `ops_to_image`.  The result is `PixRgba8` in raster
+// order, which png-nv encodes directly.
+//
+// ```novo
+// use plotraster
+// use plotfigure
+//
+// fn main() [io]
+//     match plotraster.to_image(plotfigure.single(64.0, 48.0, []), 1.0)
+//         Ok(i)  => println("${i.width}")
+//         Err(_) => println("refused")
+// ```
+pub fn to_image(f: PlotFigure, scale: Float) -> Result<Image, PlotFault>
+    todo("plot-nv.plotraster.to_image")
+
+// An op list as a raster image of a given size.
+//
+// The backend proper.  `width` and `height` are in FIGURE units and
+// `scale` turns them into pixels, so the pixel size is
+// `width * scale` by `height * scale` rounded up.
+//
+// `PlotBadRasterSize` when that product is not positive, or is large
+// enough that the buffer could not be allocated — a bound rather than a
+// failed allocation, because a `core` package has no failure path to
+// catch one with.
+//
+// ```novo
+// use plotraster
+// use srgb
+//
+// fn main() [io]
+//     match plotraster.ops_to_image([], 64.0, 48.0, 1.0, srgb.transparent())
+//         Ok(i)  => println("${i.height}")
+//         Err(_) => println("refused")
+// ```
+pub fn ops_to_image(ops: [PlotDrawOp], width: Float, height: Float, scale: Float,
+                    background: Srgba8) -> Result<Image, PlotFault>
+    todo("plot-nv.plotraster.ops_to_image")
+
+// The same, drawn into an image the caller already has.
+//
+// For a caller compositing a chart into a larger picture: a dashboard
+// tile, a report page, a frame of an animation.  The ops' coordinates
+// are offset by `(x, y)` in the destination's pixels, and anything
+// outside it is clipped.
+//
+// A NEW IMAGE COMES BACK rather than the old one being changed — which
+// is what keeps this function inside `core`'s budget, `[mutate]` being a
+// host effect.  An implementation is free to reuse the buffer when the
+// caller holds no other reference to it; that is the runtime's question
+// and not this signature's.
+//
+// ```novo
+// use plotraster
+// use image
+//
+// fn main() [io]
+//     match image.new(16, 16, PixRgba8)
+//         Ok(dst) =>
+//             match plotraster.ops_onto(dst, [], 0, 0, 1.0)
+//                 Ok(i)  => println("${i.width}")
+//                 Err(_) => println("refused")
+//         Err(_) => println("no image")
+// ```
+pub fn ops_onto(dst: Image, ops: [PlotDrawOp], x: Int, y: Int,
+                scale: Float) -> Result<Image, PlotFault>
+    todo("plot-nv.plotraster.ops_onto")
+
+// How big in pixels a figure would be at a scale.
+//
+// The rounding rule written once — up, so a half pixel of chart is not
+// cut off — for a caller sizing a buffer or a display area before
+// rendering.
+//
+// ```novo
+// use plotraster
+//
+// fn main() [io]
+//     let (w, h) = plotraster.pixel_size(640.0, 480.0, 2.0)
+//     println("${w} ${h}")
+// ```
+pub fn pixel_size(width: Float, height: Float, scale: Float) -> (Int, Int)
+    todo("plot-nv.plotraster.pixel_size")
+
+// The coverage a filled polygon gives each pixel of a row.
+//
+// THE RASTERISER'S PRIMITIVE, public because it is the thing to test:
+// an implementation that gets scanline coverage right gets every filled
+// shape right, and one that gets it wrong is visibly wrong at every
+// edge.  Answers one value per pixel of `width`, `0.0 ..= 1.0`.
+//
+// It is also the seam `raster-nv` would replace: when that package
+// lands, this becomes a call into it and every signature above is
+// unchanged.
+//
+// ```novo
+// use plotraster
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotraster.scanline_coverage([], 0.5, 16))}")
+// ```
+pub fn scanline_coverage(points: [GeomPointF], y: Float, width: Int) -> [Float]
+    todo("plot-nv.plotraster.scanline_coverage")
+
+// One colour composited over another at a coverage.
+//
+// Source-over with the coverage folded into the source's alpha, which is
+// the one blend a chart needs.  color-nv's `over` does the compositing;
+// this applies the coverage first, so the rasteriser and any caller
+// drawing its own overlay agree on what a half-covered pixel looks like.
+//
+// ```novo
+// use plotraster
+// use srgb
+//
+// fn main() [io]
+//     let c = plotraster.blend(srgb.opaque(srgb.rgb8(255, 0, 0)), srgb.white(), 0.5)
+//     println("${c.r}")
+// ```
+pub fn blend(src: Srgba8, dst: Srgb8, coverage: Float) -> Srgb8
+    todo("plot-nv.plotraster.blend")

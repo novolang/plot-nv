@@ -1,0 +1,370 @@
+// plotdraw.nv — rendering, as a pure function from a figure to a list
+// of drawing operations.
+//
+// THIS IS THE LOAD-BEARING DECISION OF THE PACKAGE, so the argument is
+// written here rather than left to be inferred.
+//
+// The plan's row asks for three targets: an SVG document, a raster, and
+// `std.canvas` draw calls for the desktop.  The third is the problem.
+// `std.canvas`'s entry points are `[io]` — `novo_canvas_draw_rects`,
+// `novo_canvas_path_fill_solid` and the rest all declare it — so a
+// function in this package that called one would inherit `[io]`, leave
+// `core`'s empty budget, and make plot-nv a `host` package.  That is not
+// a formality: a `host` plot-nv cannot be depended on by anything in
+// `core`, cannot build for wasm the way a notebook needs, and drags a
+// window system into the dependency closure of a program that only
+// wanted a PNG.
+//
+// The three ways out, and why this is the third:
+//
+//   - **Split the package** into plot-core-nv and plot-canvas-nv, the
+//     way calendar/chrono and config-core/config split.  It works.  It
+//     also costs a whole extra registry row, a second README and a
+//     version to keep in step, for one function.
+//   - **A trait with an effect parameter.**  `trait PlotSink[e]` with
+//     `draw_rect` and friends, and `render<S: PlotSink[e]>(f, s) -> [e]`.
+//     SPEC §5.6 allows it and the effect-polymorphic form would keep the
+//     budget honest.  What it costs is that the renderer becomes a
+//     CALLBACK-DRIVEN traversal: the caller cannot pause it, cannot
+//     inspect what is about to be drawn, cannot count operations, cannot
+//     render once and replay twice.  And every backend has to implement
+//     a trait to receive anything at all, including the two backends
+//     that just want a value.
+//   - **Render to a VALUE.**  `render(fig) -> [PlotDrawOp]`.  The
+//     rendering — the layout, the scales, the tick placement, the
+//     binning, the marker expansion — is arithmetic, and arithmetic is
+//     `core`.  What comes out is a list of about a dozen kinds of
+//     operation, and each target is a reader of that list.
+//
+// The third is chosen, and what it buys beyond the budget is the reason
+// it would be right anyway:
+//
+//   - **Two of the three targets are then in this package and pure.**
+//     `plotsvg` turns ops into an `SvgDocument`; `plotraster` turns them
+//     into an `image-nv` `Image`.  Neither performs anything.
+//   - **The third is thirty lines in the caller**, in their own `host`
+//     program: one `match` over the ops, one `std.canvas` call per arm.
+//     The README has it in full.  plot-nv never mentions `std.canvas`,
+//     which is exactly why it stays `core`.
+//   - **The op list is inspectable.**  A test asserts that a chart
+//     contains eleven rectangles without rasterising anything.  A
+//     notebook counts operations before deciding whether to send the
+//     SVG or a PNG.  A caller draws the chart twice — once to a canvas
+//     and once to a file — from one render.
+//   - **A fourth backend costs nothing from this package.**  A terminal
+//     plot over tui-nv, a plotter's G-code, a PDF: each is a reader of
+//     the same list, written where it belongs.
+//
+// What it costs is one intermediate allocation the callback form would
+// not make, and an op vocabulary that has to be complete enough — a
+// backend cannot draw what no op names.  The vocabulary below is
+// deliberately PRIMITIVE for that reason: markers are expanded into
+// circles and polygons here, dashes are a pattern on the op rather than
+// a style object, and there is no text layout, only a placed run.
+// Twelve operations, and a backend that handles twelve is done.
+//
+// COORDINATES ARE FIGURE COORDINATES: y grows DOWN from the top left,
+// in the figure's own units.  Not data coordinates — the scales have
+// already been applied — and not pixels, because the figure does not
+// know how big the drawing is.  `plotraster` multiplies by its scale;
+// `plotsvg` writes them as user units under a matching `viewBox`.
+//
+// NO EFFECTS.
+
+use geompoint
+use geomrect
+use plotfigure
+
+// Where a text run sits relative to its anchor point.
+//
+// THIS PACKAGE'S OWN, not svg-nv's `SvgTextAnchor`, and the duplication
+// is on purpose: an op list must not carry a type from one of the three
+// backends, or the `std.canvas` replay — which wants nothing to do with
+// SVG — would take svg-nv into its dependency closure to read an enum.
+// `plotsvg` maps between them in three lines.
+//
+// ```novo
+// use plotdraw
+//
+// fn main() [io]
+//     println("${PlotAnchorMiddle == PlotAnchorMiddle}")
+// ```
+pub enum PlotAnchor
+    // The run starts at the anchor.
+    PlotAnchorStart
+    // The run is centred on it — x axis tick labels, titles.
+    PlotAnchorMiddle
+    // The run ends at it — y axis tick labels.
+    PlotAnchorEnd
+
+// One drawing operation.
+//
+// ```novo
+// use plotdraw
+//
+// fn main() [io]
+//     println(plotdraw.op_name(PlotEndGroup))
+// ```
+pub enum PlotDrawOp
+    // Everything until the matching `PlotEndGroup` belongs to one named
+    // part of the chart: `"grid"`, `"series:temperature"`, `"legend"`.
+    // A backend may ignore these entirely — they carry no geometry — and
+    // the two in this package use them as SVG `<g id>` elements and as
+    // nothing, respectively.  They are here because a caller that wants
+    // to hide a series, hit-test one, or animate one needs to know which
+    // operations belong to it, and there is no other way to say so.
+    PlotBeginGroup(id: Str)
+    // Ends the innermost group.  Always balanced: `render` never emits
+    // a begin without its end.
+    PlotEndGroup
+    // Everything after this is clipped to this rectangle, until
+    // `PlotClearClip`.  Emitted around the series, so a point outside
+    // the axis range does not draw over the tick labels.  A backend with
+    // no clipping may ignore it and will draw a slightly untidy chart
+    // rather than a wrong one.
+    PlotSetClip(x: Float, y: Float, width: Float, height: Float)
+    // Removes the clip.
+    PlotClearClip
+    // A filled rectangle: the background, a bar, a histogram bin, a
+    // legend box.
+    PlotFillRect(x: Float, y: Float, width: Float, height: Float, color: Srgba8)
+    // A stroked rectangle outline: a bar's edge, the plot frame.
+    PlotStrokeRect(x: Float, y: Float, width: Float, height: Float, color: Srgba8, width_px: Float)
+    // A single stroked segment: an axis line, a tick mark, a grid line.
+    PlotStrokeLine(x1: Float, y1: Float, x2: Float, y2: Float, color: Srgba8, width_px: Float,
+                   dash: [Float])
+    // A stroked run of segments: a line series.  ONE op for the whole
+    // run rather than one per segment, because a backend that joins them
+    // itself gets the line joins right and a backend given a thousand
+    // separate segments cannot.
+    PlotStrokePolyline(points: [GeomPointF], color: Srgba8, width_px: Float, dash: [Float])
+    // A filled polygon: a marker that is not round, a filled area.
+    PlotFillPolygon(points: [GeomPointF], color: Srgba8)
+    // A filled disc: a round marker, a legend swatch.
+    PlotFillCircle(cx: Float, cy: Float, r: Float, color: Srgba8)
+    // A stroked circle outline: a hollow marker.
+    PlotStrokeCircle(cx: Float, cy: Float, r: Float, color: Srgba8, width_px: Float)
+    // A run of text at one anchor point.  `rotation` is in radians about
+    // the anchor, and is non-zero only for a y axis label.  No layout,
+    // no wrapping, no font family — a backend uses whatever it has, and
+    // `size` is in figure units.
+    PlotDrawText(text: Str, x: Float, y: Float, size: Float, color: Srgba8, anchor: PlotAnchor,
+                 rotation: Float)
+
+// Every operation a figure draws, in order.
+//
+// THE FUNCTION THE WHOLE PACKAGE IS SHAPED AROUND.  Pure: the same
+// figure gives the same list on every machine, in every process, with
+// nothing performed.  The order is back to front — background, grid,
+// series in the order they were added, axes, labels, legend — so a
+// backend that just replays it in order gets the right picture with no
+// z-ordering of its own.
+//
+// ```novo
+// use plotdraw
+// use plotfigure
+// use std.list
+//
+// fn main() [io]
+//     match plotdraw.render(plotfigure.single(640.0, 480.0, []))
+//         Ok(ops) => println("${list.len(ops)}")
+//         Err(_)  => println("refused")
+// ```
+pub fn render(f: PlotFigure) -> Result<[PlotDrawOp], PlotFault>
+    todo("plot-nv.plotdraw.render")
+
+// Every operation one axes draws, in a rectangle of the caller's
+// choosing.
+//
+// For a caller compositing a chart into a larger drawing — a dashboard,
+// a report page — where the figure's own coordinate system is the wrong
+// one.  The rectangle is the axes' whole box; the gutters come off it as
+// usual.
+//
+// ```novo
+// use plotdraw
+// use plotfigure
+// use plotaxis
+// use geomrect
+// use std.list
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     match plotdraw.render_axes(ax, geomrect.of_xywh(0.0, 0.0, 640.0, 480.0))
+//         Ok(ops) => println("${list.len(ops)}")
+//         Err(_)  => println("refused")
+// ```
+pub fn render_axes(ax: PlotAxes, box: GeomRectF) -> Result<[PlotDrawOp], PlotFault>
+    todo("plot-nv.plotdraw.render_axes")
+
+// The operations for one series only, inside a plot area.
+//
+// What an interactive caller re-renders when one series changes and the
+// axes did not — which is the common case in a notebook with a slider.
+//
+// ```novo
+// use plotdraw
+// use plotfigure
+// use plotaxis
+// use plotseries
+// use geomrect
+// use std.list
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     let s = plotseries.line("y", [0.0], [0.0])
+//     match plotdraw.render_series(s, ax, geomrect.of_xywh(0.0, 0.0, 100.0, 100.0))
+//         Ok(ops) => println("${list.len(ops)}")
+//         Err(_)  => println("refused")
+// ```
+pub fn render_series(s: PlotSeries, ax: PlotAxes,
+                     area: GeomRectF) -> Result<[PlotDrawOp], PlotFault>
+    todo("plot-nv.plotdraw.render_series")
+
+// The name an operation is known by: `"fill_rect"`, `"draw_text"`.
+//
+// For a test that asserts what a chart contains, and for a backend's own
+// diagnostics when it meets an op it does not handle.
+//
+// ```novo
+// use plotdraw
+//
+// fn main() [io]
+//     println(plotdraw.op_name(PlotEndGroup))
+// ```
+pub fn op_name(op: PlotDrawOp) -> Str
+    todo("plot-nv.plotdraw.op_name")
+
+// The rectangle an operation draws inside.
+//
+// An empty rectangle for the ones that draw nothing — the group markers
+// and the clip operations.  Text is ESTIMATED, by the same rule and with
+// the same caveat as `svgdoc.text_advance_estimate`: measuring it needs
+// a font file and this package is `core`.
+//
+// ```novo
+// use plotdraw
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(plotdraw.op_bounds(PlotEndGroup))}")
+// ```
+pub fn op_bounds(op: PlotDrawOp) -> GeomRectF
+    todo("plot-nv.plotdraw.op_bounds")
+
+// The rectangle a whole op list draws inside.
+//
+// What a caller cropping a chart to its content uses, and what tells a
+// notebook whether the labels fit.
+//
+// ```novo
+// use plotdraw
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(plotdraw.ops_bounds([]))}")
+// ```
+pub fn ops_bounds(ops: [PlotDrawOp]) -> GeomRectF
+    todo("plot-nv.plotdraw.ops_bounds")
+
+// The operations belonging to one group, the group markers excluded.
+//
+// The reason `PlotBeginGroup` carries an id.  A caller that wants to
+// redraw, hide or hit-test the legend asks for `"legend"` and gets
+// exactly its operations; nested groups come with it.
+//
+// ```novo
+// use plotdraw
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotdraw.ops_in_group([], "legend"))}")
+// ```
+pub fn ops_in_group(ops: [PlotDrawOp], id: Str) -> [PlotDrawOp]
+    todo("plot-nv.plotdraw.ops_in_group")
+
+// Every group id in an op list, in the order the groups open.
+//
+// ```novo
+// use plotdraw
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotdraw.group_ids([]))}")
+// ```
+pub fn group_ids(ops: [PlotDrawOp]) -> [Str]
+    todo("plot-nv.plotdraw.group_ids")
+
+// A circle as a polygon of `segments` points.
+//
+// FOR THE THIRD BACKEND, and the one helper it needs.  `std.canvas` has
+// rectangles and paths and no circle, so a replay would otherwise carry
+// trigonometry that belongs here — where it is written once and tested
+// once.  Sixteen segments is indistinguishable from a circle at a marker
+// size; a backend drawing a large one asks for more.
+//
+// ```novo
+// use plotdraw
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotdraw.circle_as_polygon(0.0, 0.0, 5.0, 16))}")
+// ```
+pub fn circle_as_polygon(cx: Float, cy: Float, r: Float, segments: Int) -> [GeomPointF]
+    todo("plot-nv.plotdraw.circle_as_polygon")
+
+// One unbroken run of points.
+//
+// What `dash_polyline` answers with.  A type of this package's own
+// rather than svg-nv's `SvgSubpath`, for the same reason `PlotAnchor` is
+// not `SvgTextAnchor`: a helper for the `std.canvas` backend must not
+// make that backend depend on the SVG one.
+//
+// ```novo
+// use plotdraw
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotdraw.dash_polyline([], [], 0.0))}")
+// ```
+pub struct PlotRun
+    // The points, in order.
+    points: [GeomPointF]
+
+// A dashed run as the list of solid pieces it is drawn as.
+//
+// The second helper for a backend with no dash support, and the same
+// argument: the phase arithmetic — where in the pattern each piece
+// starts, what happens at a corner — is the kind of thing that is
+// subtly wrong in three places if three backends each do it.  An empty
+// pattern gives back the one whole run.
+//
+// ```novo
+// use plotdraw
+// use geompoint
+// use std.list
+//
+// fn main() [io]
+//     let ps = [geompoint.origin(), geompoint.ptf(10.0, 0.0)]
+//     println("${list.len(plotdraw.dash_polyline(ps, [2.0, 2.0], 0.0))}")
+// ```
+pub fn dash_polyline(points: [GeomPointF], pattern: [Float], offset: Float) -> [PlotRun]
+    todo("plot-nv.plotdraw.dash_polyline")
+
+// How many operations a figure would produce, without producing them.
+//
+// For a notebook deciding between sending an SVG and sending a raster: a
+// scatter of a million points is a million operations and several
+// megabytes of SVG, and a PNG of it is two hundred kilobytes.
+//
+// ```novo
+// use plotdraw
+// use plotfigure
+//
+// fn main() [io]
+//     match plotdraw.op_count(plotfigure.single(640.0, 480.0, []))
+//         Ok(n)  => println("${n}")
+//         Err(_) => println("refused")
+// ```
+pub fn op_count(f: PlotFigure) -> Result<Int, PlotFault>
+    todo("plot-nv.plotdraw.op_count")

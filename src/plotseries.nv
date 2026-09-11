@@ -1,0 +1,478 @@
+// plotseries.nv — the four series a notebook draws, and the adapters
+// that get data into them.
+//
+// FOUR KINDS, AND THE MEASUREMENT BEHIND THAT NUMBER.  Line, scatter,
+// bar and histogram are what a notebook corpus actually contains; the
+// long tail after them — box, violin, heatmap, contour, error bars,
+// stacked areas, pie — is each a different layout problem rather than a
+// variation on these.  Adding one later is a variant here and a branch
+// in `plotdraw`, which is a day; getting the first four wrong is the
+// whole package.
+//
+// DATA ARRIVES AS `[Float]`, AND THE ADAPTERS ARE WHY.  A series holds
+// plain lists, and `of_ndfloat`, `of_column` and `of_table_columns`
+// convert.  The alternative — a `PlotData` enum with a variant per
+// source — would put ndarray-nv and dataframe-nv inside every series
+// value and make a caller with a bare `[Float]` construct one of their
+// types to get a chart.  Converting at the edge costs one copy per
+// series and keeps the renderer reading one thing.
+//
+// A NULL IS A GAP, NOT A ZERO.  `of_column` drops the positions a
+// dataframe column marks absent, and a LINE series drawn from one is
+// broken there rather than joined across it — because a line that
+// bridges a gap asserts data that is not in the frame.  That is
+// matplotlib's behaviour for a masked array and pandas's for a NaN, and
+// it is the one place this package's answer is not the naive one.
+//
+// NO EFFECTS.
+
+use srgb
+use ndfloat
+
+// The shape a marked point is drawn in.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.mark_name(PlotMarkCircle))
+// ```
+pub enum PlotMark
+    // No mark.  What a line series uses.
+    PlotMarkNone
+    // A filled disc.  The scatter default.
+    PlotMarkCircle
+    // A filled square.
+    PlotMarkSquare
+    // A filled triangle, point up.
+    PlotMarkTriangle
+    // A filled diamond.
+    PlotMarkDiamond
+    // Two strokes, upright.
+    PlotMarkPlus
+    // Two strokes, diagonal.
+    PlotMarkCross
+
+// Which way a bar series runs.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println("${PlotBarsVertical == PlotBarsVertical}")
+// ```
+pub enum PlotOrientation
+    // Bars rise from the x axis.  The default.
+    PlotBarsVertical
+    // Bars extend from the y axis, which is what a chart with long
+    // category names wants — a horizontal label always fits.
+    PlotBarsHorizontal
+
+// How a histogram's bins are chosen.
+//
+// Every one of these is a named rule from the statistics literature and
+// all four are in numpy's `histogram_bin_edges`, which is the reference.
+// The choice matters more than it looks: the same data binned by Sturges
+// and by Freedman-Diaconis can look unimodal or bimodal.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println("${PlotBinsSturges == PlotBinsSturges}")
+// ```
+pub enum PlotBinRule
+    // Exactly this many bins, evenly spaced across the data's range.
+    PlotBinsCount(n: Int)
+    // Bins this wide, from the first multiple at or below the minimum.
+    PlotBinsWidth(width: Float)
+    // Sturges's rule: `ceil(log2(n)) + 1` bins.  Assumes the data is
+    // roughly normal, and under-bins anything heavy-tailed — but it is
+    // the default in most software and so it is the familiar picture.
+    PlotBinsSturges
+    // Freedman-Diaconis: bin width `2 * IQR / cbrt(n)`.  Uses the
+    // interquartile range rather than the extent, so one outlier does
+    // not flatten the whole histogram.  The better default for real
+    // data, and the reason both are here.
+    PlotBinsFreedmanDiaconis
+
+// What one series draws.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.kind_name(PlotLineOf([0.0], [0.0])))
+// ```
+pub enum PlotSeriesKind
+    // Points joined in the order given.  NOT sorted by x: a caller
+    // plotting a trajectory, a hysteresis loop or a parametric curve
+    // means the order they gave.
+    PlotLineOf(xs: [Float], ys: [Float])
+    // Points, unjoined.
+    PlotScatterOf(xs: [Float], ys: [Float])
+    // One bar per category, at x = 0, 1, 2 and so on — which is what
+    // `plotaxis.categorical` places its ticks at, so bars and a line
+    // share one coordinate system.
+    PlotBarOf(values: [Float], orientation: PlotOrientation)
+    // One series of raw values, counted into bins by a rule.  The
+    // BINNING HAPPENS AT RENDER, not here, so a caller can change the
+    // rule without rebuilding the series and so the bin edges are
+    // computed once against the axis's final range.
+    PlotHistogramOf(values: [Float], bins: PlotBinRule)
+
+// One series: what it draws, and how.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.line("y", [0.0], [0.0]).label)
+// ```
+pub struct PlotSeries
+    // What it draws.
+    kind: PlotSeriesKind
+    // What the legend calls it.  Empty keeps it out of the legend,
+    // which is how a caller draws a reference line without naming it.
+    label: Str
+    // Its colour.  Set explicitly rather than cycled: a caller who
+    // wants the cycle asks `palette_color` for index n, and one who
+    // wants their own says so.  A cycle applied silently is how two
+    // charts in the same notebook end up with the same colour meaning
+    // two different things.
+    color: Srgba8
+    // How wide a line or a bar outline is.
+    width: Float
+    // The dash pattern for a line: on, off, on, off.  Empty is solid.
+    dash: [Float]
+    // The mark on each point.
+    mark: PlotMark
+    // How big a mark is, across.
+    mark_size: Float
+    // How opaque the whole series is, `0.0 ..= 1.0`, on top of the
+    // colour's own coverage.  What a scatter with ten thousand
+    // overlapping points needs.
+    alpha: Float
+
+// A line series with the default style.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.line("temperature", [0.0, 1.0], [20.0, 21.0]).label)
+// ```
+pub fn line(label: Str, xs: [Float], ys: [Float]) -> PlotSeries
+    todo("plot-nv.plotseries.line")
+
+// A scatter series with the default style: circles, no join.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.scatter("sample", [0.0], [1.0]).label)
+// ```
+pub fn scatter(label: Str, xs: [Float], ys: [Float]) -> PlotSeries
+    todo("plot-nv.plotseries.scatter")
+
+// A vertical bar series.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.bars("count", [3.0, 5.0]).label)
+// ```
+pub fn bars(label: Str, values: [Float]) -> PlotSeries
+    todo("plot-nv.plotseries.bars")
+
+// A histogram of raw values, binned at render.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.histogram("delay", [1.0, 2.0, 2.0], PlotBinsSturges).label)
+// ```
+pub fn histogram(label: Str, values: [Float], bins: PlotBinRule) -> PlotSeries
+    todo("plot-nv.plotseries.histogram")
+
+// The same series in a different colour.
+//
+// ```novo
+// use plotseries
+// use srgb
+//
+// fn main() [io]
+//     let s = plotseries.with_color(plotseries.line("y", [0.0], [0.0]),
+//                                   srgb.opaque(srgb.rgb8(200, 60, 60)))
+//     println(s.label)
+// ```
+pub fn with_color(s: PlotSeries, color: Srgba8) -> PlotSeries
+    todo("plot-nv.plotseries.with_color")
+
+// The same series with a different mark and mark size.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     let s = plotseries.with_mark(plotseries.line("y", [0.0], [0.0]), PlotMarkSquare, 5.0)
+//     println(plotseries.mark_name(s.mark))
+// ```
+pub fn with_mark(s: PlotSeries, mark: PlotMark, size: Float) -> PlotSeries
+    todo("plot-nv.plotseries.with_mark")
+
+// The same series with a different line width and dash pattern.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     let s = plotseries.with_line(plotseries.line("y", [0.0], [0.0]), 2.0, [4.0, 2.0])
+//     println("${s.width}")
+// ```
+pub fn with_line(s: PlotSeries, width: Float, dash: [Float]) -> PlotSeries
+    todo("plot-nv.plotseries.with_line")
+
+// The same series at a different opacity.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println("${plotseries.with_alpha(plotseries.line("y", [0.0], [0.0]), 0.3).alpha}")
+// ```
+pub fn with_alpha(s: PlotSeries, alpha: Float) -> PlotSeries
+    todo("plot-nv.plotseries.with_alpha")
+
+// A one-dimensional ndarray as a list of values.
+//
+// The adapter, and it is one direction on purpose: this package reads
+// arrays and never returns them.  An array of any other rank is
+// FLATTENED in row-major order rather than refused, because that is what
+// a notebook cell passing a column slice usually means and refusing it
+// would make the common case a two-line conversion.
+//
+// ```novo
+// use plotseries
+// use std.list
+//
+// fn main() [io]
+//     match ndfloat.zeros([3])
+//         Ok(a)  => println("${list.len(plotseries.of_ndfloat(a))}")
+//         Err(_) => println("no array")
+// ```
+pub fn of_ndfloat(a: NdFloat) -> [Float]
+    todo("plot-nv.plotseries.of_ndfloat")
+
+// A dataframe column as a list of values, with the nulls dropped.
+//
+// DROPPED, NOT ZEROED — a null is missing data and zero is a
+// measurement.  What it costs is that the result may be shorter than
+// the column, so a caller pairing two columns should use
+// `of_column_pair`, which drops a row only when EITHER side is null and
+// so keeps the two aligned.
+//
+// A column of a type that is not numeric answers an empty list.
+//
+// ```novo
+// use plotseries
+// use std.list
+//
+// fn main() [io]
+//     let c = DfColumn { name: "n", cells: DfIntCells([1, 2]), present: [true, true] }
+//     println("${list.len(plotseries.of_column(c))}")
+// ```
+pub fn of_column(c: DfColumn) -> [Float]
+    todo("plot-nv.plotseries.of_column")
+
+// Two columns as aligned value lists, dropping a row where either is
+// null.
+//
+// The pairing rule written once.  Two separate `of_column` calls on
+// columns with nulls in different places give two lists of different
+// lengths and silently shift every point after the first gap — which is
+// the bug this function exists to make unavailable.
+//
+// ```novo
+// use plotseries
+// use std.list
+//
+// fn main() [io]
+//     let c = DfColumn { name: "n", cells: DfIntCells([1, 2]), present: [true, true] }
+//     let (xs, ys) = plotseries.of_column_pair(c, c)
+//     println("${list.len(xs)} ${list.len(ys)}")
+// ```
+pub fn of_column_pair(x: DfColumn, y: DfColumn) -> ([Float], [Float])
+    todo("plot-nv.plotseries.of_column_pair")
+
+// A line series per named column of a table, against one shared x
+// column.
+//
+// The call a notebook makes most: a frame with a time column and four
+// measurements, and one chart with four lines on it.  Each series takes
+// its label from its column's name and its colour from `palette_color`
+// at its index — the one place a cycle IS applied, because here the
+// caller asked for many series at once and naming four colours by hand
+// is the friction this function removes.
+//
+// ```novo
+// use plotseries
+// use std.list
+//
+// fn main() [io]
+//     let t = DfTable { columns: [], rows: 0 }
+//     println("${list.len(plotseries.of_table_columns(t, "t", []))}")
+// ```
+pub fn of_table_columns(t: DfTable, x_column: Str, y_columns: [Str]) -> [PlotSeries]
+    todo("plot-nv.plotseries.of_table_columns")
+
+// How many points a series holds, before any binning.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println("${plotseries.point_count(plotseries.line("y", [0.0], [0.0]))}")
+// ```
+pub fn point_count(s: PlotSeries) -> Int
+    todo("plot-nv.plotseries.point_count")
+
+// Whether a series' x and y lists are the same length.
+//
+// The one shape error a figure has — see `PlotLengthMismatch` — asked
+// before rendering so the fault names the series.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println("${plotseries.is_consistent(plotseries.line("y", [0.0], [0.0]))}")
+// ```
+pub fn is_consistent(s: PlotSeries) -> Bool
+    todo("plot-nv.plotseries.is_consistent")
+
+// The lowest and highest x a series occupies.
+//
+// Not a tuple of a `@value` struct — two `Float`s, which a tuple may
+// hold.  An empty series answers `(0.0, 0.0)`, and `point_count` is what
+// distinguishes that from a series of one point at the origin.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     let (lo, hi) = plotseries.x_extent(plotseries.line("y", [0.0, 3.0], [0.0, 0.0]))
+//     println("${lo} ${hi}")
+// ```
+pub fn x_extent(s: PlotSeries) -> (Float, Float)
+    todo("plot-nv.plotseries.x_extent")
+
+// The lowest and highest y a series occupies.
+//
+// For a bar series this is 0 to the tallest bar, because a bar starts at
+// the axis — an extent of just the values would cut every bar off at its
+// own base.  For a histogram it is 0 to the fullest bin, which means the
+// binning has to run, which is why this takes the rule with it.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     let (lo, hi) = plotseries.y_extent(plotseries.line("y", [0.0], [5.0]))
+//     println("${lo} ${hi}")
+// ```
+pub fn y_extent(s: PlotSeries) -> (Float, Float)
+    todo("plot-nv.plotseries.y_extent")
+
+// The bin edges a rule produces for a set of values.
+//
+// Public and separate from the rendering, because the edges are the
+// thing to check: a histogram that looks wrong is almost always a
+// histogram whose bins are wrong, and a caller can print these.
+// `PlotBadBinning` when the rule produces none.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     match plotseries.bin_edges([1.0, 2.0, 3.0], PlotBinsCount(2))
+//         Ok(e)  => println("${list.len(e)}")
+//         Err(_) => println("refused")
+// ```
+pub fn bin_edges(values: [Float], rule: PlotBinRule) -> Result<[Float], PlotFault>
+    todo("plot-nv.plotseries.bin_edges")
+
+// How many values fall in each bin, given the edges.
+//
+// A value on an edge goes in the bin ABOVE it, and the top edge is
+// inclusive so the largest value is counted — numpy's rule, and the one
+// that makes the counts add up to the number of values.
+//
+// ```novo
+// use plotseries
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotseries.bin_counts([1.0, 2.0], [0.0, 1.5, 3.0]))}")
+// ```
+pub fn bin_counts(values: [Float], edges: [Float]) -> [Int]
+    todo("plot-nv.plotseries.bin_counts")
+
+// The name a mark is known by.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.mark_name(PlotMarkDiamond))
+// ```
+pub fn mark_name(m: PlotMark) -> Str
+    todo("plot-nv.plotseries.mark_name")
+
+// The name a series kind is known by.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println(plotseries.kind_name(PlotScatterOf([0.0], [0.0])))
+// ```
+pub fn kind_name(k: PlotSeriesKind) -> Str
+    todo("plot-nv.plotseries.kind_name")
+
+// The nth colour of the default palette, wrapping.
+//
+// EIGHT COLOURS, chosen to stay distinguishable under the two common
+// forms of colour blindness and to hold their contrast on both a white
+// and a dark background — checked with color-nv's own contrast rules
+// rather than picked by eye.  A caller who wants a different palette
+// passes their own colours to `with_color`; this one exists so that the
+// default chart is readable rather than so that nobody changes it.
+//
+// ```novo
+// use plotseries
+// use srgb
+//
+// fn main() [io]
+//     println("${plotseries.palette_color(0).a}")
+// ```
+pub fn palette_color(n: Int) -> Srgba8
+    todo("plot-nv.plotseries.palette_color")
+
+// The default style for a series of this kind: colour, width, mark,
+// alpha.
+//
+// What `line`, `scatter`, `bars` and `histogram` apply, exposed so a
+// caller building a `PlotSeries` literal can start from it.
+//
+// ```novo
+// use plotseries
+//
+// fn main() [io]
+//     println("${plotseries.default_style(PlotLineOf([0.0], [0.0]), 0).width}")
+// ```
+pub fn default_style(kind: PlotSeriesKind, index: Int) -> PlotSeries
+    todo("plot-nv.plotseries.default_style")

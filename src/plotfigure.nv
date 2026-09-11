@@ -1,0 +1,407 @@
+// plotfigure.nv — the whole picture: a canvas, and the axes on it.
+//
+// AN AXES IS PLACED BY FRACTIONS, not by a rectangle.  `PlotAxes` says
+// where it sits as four numbers in `0.0 ..= 1.0` of the figure, so a
+// figure is resolution-independent: the same value renders at 640
+// pixels and at 1920 with every axes in the same relative place, and
+// `plotraster`'s scale factor is a multiplication rather than a
+// re-layout.  It is matplotlib's `add_axes` rectangle, and it is also
+// the answer to a constraint — a boxed struct cannot hold a `@value`
+// `GeomRectF` field (SPEC §14.5), so the alternative was four Floats
+// either way and fractions are the four that carry more.
+//
+// NO LAYOUT ENGINE, and that is a decision rather than an omission.
+// matplotlib's `tight_layout` measures every tick label and title and
+// solves for margins that fit them — which needs text metrics, which
+// need a font file, which needs a filesystem.  This package is `core`
+// and has none.  So `grid` computes the fractions for a regular grid of
+// subplots and the gutters are a fixed fraction the caller can change;
+// a caller who wants labels measured measures them with a font package
+// and sets the fractions itself.
+//
+// NO EFFECTS.
+
+use srgb
+use plotaxis
+use plotseries
+
+// Where a legend sits.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     println("${PlotLegendTopRight == PlotLegendTopRight}")
+// ```
+pub enum PlotLegendPos
+    // Inside the plot area, top right.  The default, and the corner
+    // most charts leave empty.
+    PlotLegendTopRight
+    // Inside, top left.
+    PlotLegendTopLeft
+    // Inside, bottom right.
+    PlotLegendBottomRight
+    // Inside, bottom left.
+    PlotLegendBottomLeft
+    // In a strip to the right of the plot area, which the plot area is
+    // narrowed to make room for.  What a chart with many series needs,
+    // and the only position that takes space from the data.
+    PlotLegendRight
+
+// Whether and where a legend is drawn.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     println("${plotfigure.legend_at(PlotLegendTopRight).visible}")
+// ```
+pub struct PlotLegend
+    // Whether it is drawn at all.  A legend with no named series is not
+    // drawn whatever this says — an empty box in the corner of a chart
+    // is worse than no box.
+    visible: Bool
+    // Where it sits.
+    position: PlotLegendPos
+
+// One set of axes: two scales, the series on them, and where it sits.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${ax.fw}")
+// ```
+pub struct PlotAxes
+    // The horizontal axis.
+    x: PlotAxis
+    // The vertical axis.
+    y: PlotAxis
+    // What is drawn on them, in order — so a later series draws over an
+    // earlier one, which is how a caller puts a fitted line on top of
+    // its scatter.
+    series: [PlotSeries]
+    // A heading above this axes.  Empty draws none.
+    title: Str
+    // Whether and where the legend goes.
+    legend: PlotLegend
+    // The left edge of this axes' box, as a fraction of the figure's
+    // width.  The BOX includes the gutters the labels are drawn in, not
+    // just the plot area — `plot_area_of` is what takes the gutters off.
+    fx: Float
+    // The top edge, as a fraction of the figure's height.
+    fy: Float
+    // How wide the box is, as a fraction.
+    fw: Float
+    // How tall it is, as a fraction.
+    fh: Float
+    // How much of the box's width the left gutter takes, for tick
+    // labels and the y axis label.
+    gutter_left: Float
+    // How much of the box's height the bottom gutter takes.
+    gutter_bottom: Float
+    // How much of the box's height the top gutter takes, for the title.
+    gutter_top: Float
+    // How much of the box's width the right gutter takes.
+    gutter_right: Float
+
+// The whole picture.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     println("${plotfigure.figure(640.0, 480.0, []).width}")
+// ```
+pub struct PlotFigure
+    // How wide the figure is, in the units the backend interprets: user
+    // units in an SVG, pixels before scaling in a raster.
+    width: Float
+    // How tall it is.
+    height: Float
+    // What is painted behind everything.  A fully transparent
+    // background means no background operation is emitted at all, which
+    // is what an SVG going into a page wants.
+    background: Srgba8
+    // A heading above the whole figure, above any axes titles.  Empty
+    // draws none.
+    title: Str
+    // The axes, in draw order.
+    axes: [PlotAxes]
+
+// A figure of a given size with a white background and no title.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     println("${plotfigure.figure(640.0, 480.0, []).height}")
+// ```
+pub fn figure(width: Float, height: Float, axes: [PlotAxes]) -> PlotFigure
+    todo("plot-nv.plotfigure.figure")
+
+// A figure holding exactly one axes, filling it.
+//
+// The call a notebook cell makes: one chart, one line, done.
+//
+// ```novo
+// use plotfigure
+// use plotseries
+//
+// fn main() [io]
+//     let f = plotfigure.single(640.0, 480.0, [plotseries.line("y", [0.0], [0.0])])
+//     println("${list.len(f.axes)}")
+// ```
+pub fn single(width: Float, height: Float, series: [PlotSeries]) -> PlotFigure
+    todo("plot-nv.plotfigure.single")
+
+// An axes filling its figure, with the default gutters.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     println("${plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), []).fh}")
+// ```
+pub fn axes(x: PlotAxis, y: PlotAxis, series: [PlotSeries]) -> PlotAxes
+    todo("plot-nv.plotfigure.axes")
+
+// A regular grid of axes, `rows` by `cols`, in reading order.
+//
+// The whole of the layout this package does.  Each cell gets an equal
+// fraction with `spacing` of the figure left between them; a caller who
+// wants unequal cells sets the fractions itself.
+//
+// ```novo
+// use plotfigure
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(plotfigure.grid(2, 2, 0.05))}")
+// ```
+pub fn grid(rows: Int, cols: Int, spacing: Float) -> [PlotAxes]
+    todo("plot-nv.plotfigure.grid")
+
+// The same figure with a title.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     println(plotfigure.with_title(plotfigure.figure(10.0, 10.0, []), "sales").title)
+// ```
+pub fn with_title(f: PlotFigure, title: Str) -> PlotFigure
+    todo("plot-nv.plotfigure.with_title")
+
+// The same figure on a different background.
+//
+// ```novo
+// use plotfigure
+// use srgb
+//
+// fn main() [io]
+//     let f = plotfigure.with_background(plotfigure.figure(10.0, 10.0, []), srgb.transparent())
+//     println("${f.background.a}")
+// ```
+pub fn with_background(f: PlotFigure, color: Srgba8) -> PlotFigure
+    todo("plot-nv.plotfigure.with_background")
+
+// The same figure with one more axes.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${list.len(plotfigure.add_axes(plotfigure.figure(10.0, 10.0, []), ax).axes)}")
+// ```
+pub fn add_axes(f: PlotFigure, ax: PlotAxes) -> PlotFigure
+    todo("plot-nv.plotfigure.add_axes")
+
+// The same axes with one more series on it.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+// use plotseries
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     let s = plotseries.line("y", [0.0], [0.0])
+//     println("${list.len(plotfigure.add_series(ax, s).series)}")
+// ```
+pub fn add_series(ax: PlotAxes, s: PlotSeries) -> PlotAxes
+    todo("plot-nv.plotfigure.add_series")
+
+// The same axes placed at a fractional rectangle of the figure.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${plotfigure.placed_at(ax, 0.0, 0.0, 0.5, 1.0).fw}")
+// ```
+pub fn placed_at(ax: PlotAxes, fx: Float, fy: Float, fw: Float, fh: Float) -> PlotAxes
+    todo("plot-nv.plotfigure.placed_at")
+
+// The same axes with a title.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println(plotfigure.with_axes_title(ax, "north").title)
+// ```
+pub fn with_axes_title(ax: PlotAxes, title: Str) -> PlotAxes
+    todo("plot-nv.plotfigure.with_axes_title")
+
+// The same axes with a legend somewhere, or none.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${plotfigure.with_legend(ax, plotfigure.legend_at(PlotLegendRight)).legend.visible}")
+// ```
+pub fn with_legend(ax: PlotAxes, legend: PlotLegend) -> PlotAxes
+    todo("plot-nv.plotfigure.with_legend")
+
+// The same axes with different gutters, as fractions of its own box.
+//
+// The manual half of "no layout engine": a caller who measured its tick
+// labels with a font package sets the gutters from what it measured.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${plotfigure.with_gutters(ax, 0.2, 0.15, 0.08, 0.03).gutter_left}")
+// ```
+pub fn with_gutters(ax: PlotAxes, left: Float, bottom: Float, top: Float, right: Float) -> PlotAxes
+    todo("plot-nv.plotfigure.with_gutters")
+
+// A legend at a position, visible.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     println("${plotfigure.legend_at(PlotLegendTopLeft).visible}")
+// ```
+pub fn legend_at(position: PlotLegendPos) -> PlotLegend
+    todo("plot-nv.plotfigure.legend_at")
+
+// A legend that is not drawn.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     println("${plotfigure.no_legend().visible}")
+// ```
+pub fn no_legend() -> PlotLegend
+    todo("plot-nv.plotfigure.no_legend")
+
+// The rectangle an axes' whole box occupies, in figure coordinates.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+// use geomrect
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${geomrect.width(plotfigure.box_of(ax, 640.0, 480.0))}")
+// ```
+pub fn box_of(ax: PlotAxes, fig_width: Float, fig_height: Float) -> GeomRectF
+    todo("plot-nv.plotfigure.box_of")
+
+// The rectangle the DATA is drawn in: the box less its gutters, and less
+// the strip a `PlotLegendRight` takes.
+//
+// The one every coordinate in a rendered chart is relative to, which is
+// why it is public: a caller doing its own hit-testing maps a pointer
+// position back through this rectangle and `plotaxis.value_at`.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+// use geomrect
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${geomrect.width(plotfigure.plot_area_of(ax, 640.0, 480.0))}")
+// ```
+pub fn plot_area_of(ax: PlotAxes, fig_width: Float, fig_height: Float) -> GeomRectF
+    todo("plot-nv.plotfigure.plot_area_of")
+
+// The transform from data coordinates to figure coordinates for this
+// axes, with the y axis flipped.
+//
+// geometry-nv's `mapping` applied to the plot area, and the reason this
+// package does not carry a projection of its own: a data point becomes a
+// figure point by `geomxform.apply_point`, and the flip — data y grows
+// up, drawing y grows down — falls out of asking for a destination
+// rectangle whose height is negative.
+//
+// Only defined for axes whose ranges are resolved; one still on
+// automatic gives the identity.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+// use geomxform
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${geomxform.is_identity(plotfigure.data_to_figure(ax, 640.0, 480.0))}")
+// ```
+pub fn data_to_figure(ax: PlotAxes, fig_width: Float, fig_height: Float) -> GeomXform
+    todo("plot-nv.plotfigure.data_to_figure")
+
+// The same axes with both ranges resolved from the series on it.
+//
+// What an automatic axis becomes: every series' extent unioned, padded
+// to the next tick.  Called by the renderer, and public because a caller
+// that wants to know what range its chart will end up with should be
+// able to ask without rendering.
+//
+// ```novo
+// use plotfigure
+// use plotaxis
+//
+// fn main() [io]
+//     let ax = plotfigure.axes(plotaxis.linear("x"), plotaxis.linear("y"), [])
+//     println("${plotfigure.resolved(ax).x.max}")
+// ```
+pub fn resolved(ax: PlotAxes) -> PlotAxes
+    todo("plot-nv.plotfigure.resolved")
+
+// Whether every series on every axes has consistent data and every
+// scale can hold its range.
+//
+// The check `plotdraw.render` makes first.  Asking it separately lets a
+// notebook cell report a bad figure without producing an empty chart.
+//
+// ```novo
+// use plotfigure
+//
+// fn main() [io]
+//     match plotfigure.validate(plotfigure.figure(10.0, 10.0, []))
+//         Ok(_)  => println("ok")
+//         Err(_) => println("refused")
+// ```
+pub fn validate(f: PlotFigure) -> Result<PlotFigure, PlotFault>
+    todo("plot-nv.plotfigure.validate")

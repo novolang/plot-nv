@@ -1,0 +1,57 @@
+[package]
+name        = "plot-nv"
+version     = "0.0.1"
+description = "The plotting subset a notebook uses: a figure with axes, line, scatter, bar and histogram series over ndarray arrays and dataframe columns, tick placement as a named algorithm, and rendering as a pure function into a list of draw operations that an SVG document, a raster image or a desktop canvas each replay."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`, and the argument is the whole design — see the README's
+# "Rendering is a pure function".  A plotting library that drew on a
+# canvas would be `host`, because `std.canvas`'s calls are `[io]`.  This
+# one RENDERS to a list of draw operations, which is arithmetic, and the
+# caller replays that list against whatever it has.  Two of the three
+# targets are then in this package (an SVG document, a raster image) and
+# the third is thirty lines in the caller's own `host` program.
+layer       = "core"
+
+category    = "science"
+
+tags        = ["plot", "chart", "graph", "matplotlib", "plotters", "figure", "axis", "notebook"]
+repository  = "https://github.com/novolang/plot-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Charts as a pure function from a figure to draw operations"
+
+[dependencies]
+# THE TWO SIBLINGS ARE PATHS while this lane develops them together.
+# The coordinator converts each to `^0.0.1` before publish and publishes
+# in dependency order — geometry-nv, then svg-nv, then this.
+geometry-nv  = "^0.0.1"
+svg-nv       = "^0.0.1"
+
+# The four published ones are ranges.  Under the caret rule `^0.0.1`
+# means exactly 0.0.1: a `0.0.x` version has no compatible neighbours.
+#
+# WHAT EACH IS FOR.  ndarray-nv and dataframe-nv are the INPUT — a plot
+# of an array, a plot of a column — and taking them as dependencies
+# rather than defining a `PlotData` of its own is what makes this
+# package part of the notebook tier instead of beside it.  color-nv is
+# every colour in a figure and in a draw operation.  image-nv is the
+# raster target: `plotraster` fills one of its `Image` values, and the
+# caller encodes it with png-nv or writes it somewhere.  Every one of
+# them is `core`, so this package still is.
+ndarray-nv   = "^0.0.1"
+dataframe-nv = "^0.0.1"
+color-nv     = "^0.0.1"
+image-nv     = "^0.0.1"
