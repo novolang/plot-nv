@@ -203,9 +203,9 @@ window.
 - **Text metrics and font loading.** See rule 9. `PlotDrawText` carries
   a size and an anchor, and the backend measures.
 - **Interactivity, animation and three-dimensional axes.**
-- **A microcontroller build.** A figure and its operation list are
-  growable lists. This package makes no device claim and ships no device
-  probe.
+- **A microcontroller build.** A figure and its operation list are growable
+  lists. Nothing here is claimed to build for a device with no heap allocator,
+  and there is no `tests/embedded_probe.nv`.
 
 ## Related packages
 
