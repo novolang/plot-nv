@@ -1,6 +1,6 @@
 [package]
 name        = "plot-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "The plotting subset a notebook uses: a figure with axes, line, scatter, bar and histogram series over ndarray arrays and dataframe columns, tick placement as a named algorithm, and rendering as a pure function into a list of draw operations that an SVG document, a raster image or a desktop canvas each replay."
 license     = "Apache-2.0"
 

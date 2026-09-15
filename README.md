@@ -1,241 +1,279 @@
 # plot-nv
 
-**Status: NOT IMPLEMENTED — interface only.**
+A chart is a picture of numbers: a pair of axes, a scale on each, and
+one or more series of data drawn inside them. This package builds that
+picture in novo-lang and answers it as a list of primitive drawing
+operations, which an SVG document, a raster image or a desktop canvas
+each replay. Its references are the Rust crate
+[plotters](https://docs.rs/plotters) for the split between a figure and
+its backends and
+[matplotlib](https://matplotlib.org/stable/api/index.html) for the names
+of the operations. It reads arrays from
+[ndarray-nv](https://novo-lang.org/packages/ndarray-nv) and columns from
+[dataframe-nv](https://novo-lang.org/packages/dataframe-nv).
 
-Every public function below is published with its signature and its
-effect row, and every body is `todo()`. Installing this package works;
-calling it panics with `not implemented`.
+**Status: NOT IMPLEMENTED — interface only.** Every function is declared
+with its full signature, but every body is a `todo()` that panics when
+called. The package is published so its design can be reviewed and
+depended on before it is implemented. Version 0.1.0 will be the first
+working release.
 
-## What this is
+## What the pieces are
 
-The plotting subset a notebook uses: a figure with axes, line, scatter,
-bar and histogram series over `ndarray-nv` arrays and `dataframe-nv`
-columns, tick placement as a named algorithm, legends and labels — and
-**rendering as a pure function into a list of draw operations** that an
-SVG document, a raster image or a desktop canvas each replay.
+A **figure** is the whole drawing: a size, a background, an optional
+title, and one or more sets of **axes**. A set of axes is a pair of
+axes, the **series** drawn inside them, a title and a legend. A
+**series** is one run of data with a label and a style.
 
-It is the chart in [`orbit/novobook`](../novobook), whose README says
-today that it has no plots.
+An **axis** carries a **scale**, a range, a tick rule, a number format
+and whether to draw grid lines. A **scale** maps a data value to a
+position between 0 and 1 along the axis. Three are available: linear,
+logarithmic, and **symmetric logarithmic**, which is logarithmic away
+from zero and linear near it, so that data crossing zero can still be
+drawn on a log-like axis.
+
+A **tick** is one labelled position on an axis. Choosing which positions
+to label is a real decision: 0, 2.5, 5, 7.5, 10 reads well and 0, 2.857,
+5.714 does not. A **tick rule** is that decision as a value.
+
+A **bin** is one bar of a histogram. A **binning rule** decides how many
+bins and where their edges fall. The same data under two rules can look
+as if it has one peak or two.
+
+**Figure coordinates** are the coordinates every drawing operation is
+in. The origin is the top left, `y` grows downwards, and the units are
+the figure's own. They are not data coordinates, because the scales have
+already been applied, and not pixels, because the figure does not know
+how large the drawing will be.
+
+A **draw operation** is one primitive instruction: fill this rectangle,
+stroke this polyline, place this text. There are twelve, and a backend
+that handles twelve is finished.
+
+## Install
 
 ```
 novo pkg add plot-nv
-novo pkg build
-novo test
 ```
 
-## The one example that will work
+## Example
 
 ```novo
+use std.list
 use plotseries
 use plotfigure
+use plotdraw
 use plotsvg
 use svgwrite
 
-// A dataframe's columns as a chart, as SVG text a notebook can put in
-// its output cell.
-fn chart_of(t: DfTable, x: Str, ys: [Str]) -> Result<Str, PlotFault>
-    let fig = plotfigure.single(640.0, 400.0, plotseries.of_table_columns(t, x, ys))
-    plotsvg.to_svg_string(plotfigure.with_title(fig, "measurements"), svgwrite.minimal())
+fn main() [io]
+    // A line through five points, labelled for the legend.
+    let s = plotseries.line("temperature", [0.0, 1.0, 2.0, 3.0, 4.0],
+                                           [3.1, 3.6, 4.0, 3.8, 4.4])
+
+    // One set of axes filling a 640-by-400 figure, with a title.
+    let fig = plotfigure.with_title(plotfigure.single(640.0, 400.0, [s]), "measurements")
+
+    // Rendering answers a list of primitive draw operations. Nothing is
+    // drawn and nothing is written.
+    match plotdraw.render(fig)
+        Err(e)   => println(e.message())
+        Ok(ops)  => println("${list.len(ops)} draw operations")
+
+    // One backend replays that list as an SVG document.
+    match plotsvg.to_svg_string(fig, svgwrite.minimal())
+        Err(e)   => println(e.message())
+        Ok(text) => println("${text.len()} characters of SVG")
 ```
 
-## The layer, and why — the load-bearing decision
+Build and test with `novo pkg build` and `novo test`. Today `novo test`
+fails on purpose: every test reaches a
+`not implemented: plot-nv.<module>.<fn>` panic. The tests are the
+specification the implementation will have to satisfy.
 
-`core`, and the row asked for something that makes that hard. Three
-targets: an SVG document, a raster, and **`std.canvas` draw calls for the
-desktop**. The third is the problem.
+## What the package contains
 
-`std.canvas`'s entry points are `[io]` — `novo_canvas_draw_rects`,
-`novo_canvas_path_fill_solid` and the rest all declare it. A function
-here that called one would inherit `[io]`, leave `core`'s empty budget,
-and make plot-nv a `host` package. That is not a formality: a `host`
-plot-nv cannot be depended on by anything in `core`, cannot build for
-wasm the way a notebook needs, and drags a window system into the
-dependency closure of a program that only wanted a PNG.
-
-Three ways out were available.
-
-| | cost |
+| Module | Contents |
 | --- | --- |
-| **Split the package** — plot-core-nv and plot-canvas-nv, the way calendar/chrono and config-core/config split | a whole extra registry row, a second README and a version to keep in step, for one function |
-| **A trait with an effect parameter** — `trait PlotSink[e]`, `render<S: PlotSink[e]>(f, s) -> [e]` (SPEC §5.6) | the renderer becomes a callback-driven traversal: the caller cannot pause it, inspect what is about to be drawn, count operations, or render once and replay twice — and every backend must implement a trait to receive anything, including the two that just want a value |
-| **Render to a value** — `render(fig) -> [PlotDrawOp]` | one intermediate allocation, and an op vocabulary that has to be complete enough |
+| `plotseries` | The four series kinds, their constructors and styles, the seven marker shapes, the four binning rules, the conversions from an array and from a dataframe column, the extents, and the default palette. |
+| `plotaxis` | The three scales, the five tick rules, the five number formats, an axis and its options, tick placement, the mapping between a value and a position, and the rounding rule underneath tick placement. |
+| `plotfigure` | The figure, a set of axes, their placement as fractions of the figure, a regular grid of them, titles, backgrounds, legends, gutters, the rectangles they resolve to, and validation. |
+| `plotdraw` | The twelve draw operations, the renderer, the per-axes and per-series renderers, the queries over an operation list, and the two geometry helpers a backend needs. |
+| `plotsvg` | Turning a figure or an operation list into an SVG document or into SVG text. |
+| `plotraster` | Turning a figure or an operation list into an image, compositing one onto an image the caller owns, the pixel size arithmetic, and the scanline coverage and blending underneath. |
+| `plotfault` | Every reason a figure refuses to render, as one enum with five variants. |
 
-**The third is chosen**, and what it buys beyond the budget is the
-reason it would be right anyway:
+## How to choose an entry point
 
-- **Two of the three targets are then in this package and pure.**
-  `plotsvg` turns ops into an `SvgDocument`; `plotraster` turns them into
-  an `image-nv` `Image`. Neither performs anything.
-- **The third is thirty lines in the caller** — see below. plot-nv never
-  mentions `std.canvas`, which is exactly why it stays `core`.
-- **The op list is inspectable.** A test asserts that a chart contains
-  eleven rectangles without rasterising anything. A notebook counts
-  operations before deciding whether to send the SVG or a PNG. A caller
-  draws the chart twice — once to a canvas, once to a file — from one
-  render.
-- **A fourth backend costs this package nothing.** A terminal plot over
-  `tui-nv`, a plotter's G-code, a PDF: each is a reader of the same list,
-  written where it belongs.
+**`plotfigure.single` is the one-axes case** and `plotfigure.figure`
+takes several. `plotfigure.grid` computes the placements for a regular
+grid of subplots.
 
-### The third backend, in full
+**`plotdraw.render` is the only renderer.** Everything downstream reads
+its list.
 
-This is the whole of what a `host` program writes to put a chart on a
-desktop canvas. It lives in the caller, not here.
+| Backend | Call | Where it runs |
+| --- | --- | --- |
+| SVG | `plotsvg.to_svg` or `.to_svg_string` | here, and it performs nothing |
+| Raster | `plotraster.to_image` | here, and it performs nothing |
+| A desktop canvas | in the caller | wherever the canvas is |
 
-```novo ignore
-fn replay(c: Canvas, ops: [PlotDrawOp]) [io]
-    for op in ops
-        match op
-            PlotFillRect(x, y, w, h, col) =>
-                c.rect(x, y, w, h, col)
-            PlotStrokeRect(x, y, w, h, col, lw) =>
-                c.path([(x, y), (x + w, y), (x + w, y + h), (x, y + h)], true)
-                c.stroke(lw, col)
-            PlotStrokeLine(x1, y1, x2, y2, col, lw, dash) =>
-                for run in plotdraw.dash_polyline([pt(x1, y1), pt(x2, y2)], dash, 0.0)
-                    c.path(run.points, false)
-                    c.stroke(lw, col)
-            PlotStrokePolyline(pts, col, lw, dash) =>
-                for run in plotdraw.dash_polyline(pts, dash, 0.0)
-                    c.path(run.points, false)
-                    c.stroke(lw, col)
-            PlotFillPolygon(pts, col) =>
-                c.path(pts, true)
-                c.fill(col)
-            PlotFillCircle(cx, cy, r, col) =>
-                c.path(plotdraw.circle_as_polygon(cx, cy, r, 16), true)
-                c.fill(col)
-            PlotStrokeCircle(cx, cy, r, col, lw) =>
-                c.path(plotdraw.circle_as_polygon(cx, cy, r, 16), true)
-                c.stroke(lw, col)
-            PlotDrawText(s, x, y, size, col, anchor, rot) =>
-                c.text(s, x, y, size, col, anchor, rot)
-            PlotSetClip(x, y, w, h) => c.clip(x, y, w, h)
-            PlotClearClip           => c.clip_none()
-            PlotBeginGroup(_)       => ()
-            PlotEndGroup            => ()
+The third one is a loop over the twelve operations in the caller's own
+code. This package never mentions a canvas, which is what keeps it free
+of any effect and usable from a program that only wants an SVG file.
+`plotdraw.circle_as_polygon` and `plotdraw.dash_polyline` are published
+for that loop, because a canvas has paths and no circles and no dashes.
+
+**Ask questions of the operation list rather than of a picture.**
+`plotdraw.op_count` says how many operations a figure will produce,
+`ops_bounds` gives the rectangle they cover, and `ops_in_group` selects
+the ones a named part of the chart produced. A test can assert that a
+chart contains eleven rectangles without drawing anything.
+
+**Render once and replay twice.** The same list goes to a file and to a
+window.
+
+## The rules a user needs
+
+1. **Rendering answers a value, and nothing here draws.** No function in
+   this package performs any input or output.
+2. **Draw operations are in figure coordinates**, with the origin at the
+   top left and `y` growing downwards. `plotraster` multiplies by its
+   scale and `plotsvg` writes them as user units under a matching view
+   box.
+3. **The operation vocabulary is primitive.** Markers are expanded into
+   circles and polygons by the renderer, a dash is a list of lengths on
+   the operation rather than a style object, and text is a placed run
+   with no layout.
+4. **The default tick rule is Heckbert's.** Take the range, divide by
+   the number of ticks wanted, round the spacing up to the nearest 1, 2,
+   5 or 10 times a power of ten, and place ticks at multiples of it. It
+   is the loose-label algorithm of "Nice Numbers for Graph Labels",
+   Graphics Gems I, 1990. `plotaxis.nice_number` is the rounding step on
+   its own.
+5. **A tick rule is a value you can name.** `PlotTicksNice` is
+   Heckbert's, `PlotTicksCount` asks for a number of them,
+   `PlotTicksStep` fixes the spacing and the origin, `PlotTicksAt` lists
+   them, and `PlotTicksDecade` places one per power of the base.
+6. **A binning rule is a value you can name too.** `PlotBinsSturges` and
+   `PlotBinsFreedmanDiaconis` are NumPy's two rules,
+   `PlotBinsCount` fixes the number and `PlotBinsWidth` the width. The
+   same data under two rules can look unimodal or bimodal, so the
+   picture says which rule produced it.
+7. **A null in a dataframe column is a gap, not a zero.**
+   `plotseries.of_column` drops the absent positions, and a line drawn
+   from the result is broken there rather than joined across it. A line
+   that bridges a gap asserts data the frame does not have. This follows
+   matplotlib's handling of a masked array.
+8. **Pair two columns with `of_column_pair`, never with two
+   `of_column` calls.** The pair drops a row when either side is absent
+   and keeps the two lists aligned. Two separate calls on columns whose
+   nulls fall in different places give lists of different lengths and
+   shift every point after the first gap.
+9. **An axes is placed as fractions of the figure**, from 0 to 1, as
+   matplotlib's `add_axes` rectangle is. There is no layout engine,
+   because measuring a tick label needs a font file and this package
+   reads nothing. The consequence is that one figure value renders at
+   640 units and at 1920 with every axes in the same relative place.
+10. **Gutters are fractions the caller sets.** They are the space
+    reserved for tick labels, axis labels and a title.
+11. **A logarithmic axis refuses a range that includes zero or a
+    negative number.** `PlotLogRangeInvalid` names the axis and the
+    range, and `plotaxis.range_is_valid` asks in advance. Use a
+    symmetric logarithmic scale for data that crosses zero.
+12. **A series whose two lists differ in length is refused.**
+    `PlotLengthMismatch` names the series and both lengths, and
+    `plotseries.is_consistent` asks in advance.
+13. **The operation list carries no type from any backend.**
+    `PlotAnchor` is this package's own rather than svg-nv's text anchor,
+    so a caller replaying the list onto a canvas does not take svg-nv
+    into its dependency closure to read one enum.
+
+## What is not included
+
+- **A layout engine.** See rule 9.
+- **Box plots, violin plots, heat maps, contour plots, error bars,
+  stacked areas and pie charts.** The four series kinds here are the
+  ones a notebook corpus actually contains. Each of the others is a
+  different layout problem rather than a variation on these.
+- **The extended Wilkinson tick algorithm** of Talbot, Lin and Hanrahan,
+  which scores candidate tick sets and produces better axes on awkward
+  ranges at the cost of a search. `PlotTickRule` is an enum so that it
+  can arrive as another variant.
+- **Text metrics and font loading.** See rule 9. `PlotDrawText` carries
+  a size and an anchor, and the backend measures.
+- **Interactivity, animation and three-dimensional axes.**
+- **A microcontroller build.** A figure and its operation list are
+  growable lists. This package makes no device claim and ships no device
+  probe.
+
+## Related packages
+
+- [geometry-nv](https://novo-lang.org/packages/geometry-nv) owns the
+  points, rectangles and transforms a figure is laid out with.
+- [svg-nv](https://novo-lang.org/packages/svg-nv) is the document the
+  first backend writes.
+- [image-nv](https://novo-lang.org/packages/image-nv) is the raster the
+  second backend fills.
+- [color-nv](https://novo-lang.org/packages/color-nv) owns every colour
+  in a figure and in a draw operation.
+- [ndarray-nv](https://novo-lang.org/packages/ndarray-nv) and
+  [dataframe-nv](https://novo-lang.org/packages/dataframe-nv) are the
+  input. `plotseries.of_ndfloat` and `.of_column` are the two doors.
+- [stats-nv](https://novo-lang.org/packages/stats-nv) computes the
+  summaries a chart is usually drawn beside.
+
+## Tests
+
+```bash
+novo test tests/plot_tests.nv          # 33 tests: ticks, binning, series and the op list
 ```
 
-`circle_as_polygon` and `dash_polyline` are in `plotdraw` for exactly
-this: `std.canvas` has paths and no circle and no dashes, and the
-trigonometry and the phase arithmetic belong in one place rather than in
-every backend.
+plotters is the reference for the backend split and matplotlib for the
+operations. The tick cases are Heckbert's own worked examples from
+Graphics Gems I, and the binning cases are NumPy's documented rules.
 
-## The load-bearing interface
+The suite asserts that a figure renders to the operations it should
+without anything being drawn, that a null in a column breaks a line
+rather than joining across it, that `of_column_pair` keeps two columns
+aligned where two separate calls would not, that a logarithmic axis
+refuses a range containing zero, that a series with mismatched lengths
+is refused, and that an axes placed by fractions lands in the same
+relative place at two figure sizes.
 
-```novo ignore
-pub fn render(f: PlotFigure) -> Result<[PlotDrawOp], PlotFault>   // the only renderer
+The tests compile today and fail at run, each on the
+`not implemented: plot-nv.<module>.<fn>` panic that is its body. That is
+the expected state of an interface release. They turn green one at a
+time as bodies land.
 
-pub enum PlotDrawOp          // twelve operations, all primitive
-    PlotBeginGroup(id: Str)  PlotEndGroup
-    PlotSetClip(…)           PlotClearClip
-    PlotFillRect(…)          PlotStrokeRect(…)
-    PlotStrokeLine(…)        PlotStrokePolyline(points: [GeomPointF], …)
-    PlotFillPolygon(…)       PlotFillCircle(…)  PlotStrokeCircle(…)
-    PlotDrawText(text: Str, x: Float, y: Float, size: Float, …)
-```
+## Implementation status
 
-The vocabulary is deliberately primitive: markers are expanded into
-circles and polygons by the renderer, a dash is a pattern on the op
-rather than a style object, and there is no text layout — only a placed
-run. **A backend that handles twelve operations is done.**
+| Item | Implemented |
+| --- | --- |
+| `plotseries.PlotSeries`, `.PlotSeriesKind`, `.PlotMark`, `.PlotOrientation`, `.PlotBinRule` | declared |
+| `plotaxis.PlotAxis`, `.PlotTick`, `.PlotScale`, `.PlotTickRule`, `.PlotNumberFormat` | declared |
+| `plotfigure.PlotFigure`, `.PlotAxes`, `.PlotLegend`, `.PlotLegendPos` | declared |
+| `plotdraw.PlotDrawOp`, `.PlotAnchor`, `.PlotRun`, `plotfault.PlotFault` | declared |
+| `plotseries.line`, `.scatter`, `.bars`, `.histogram` | no |
+| `plotseries.with_color`, `.with_mark`, `.with_line`, `.with_alpha`, `.default_style`, `.palette_color` | no |
+| `plotseries.of_ndfloat`, `.of_column`, `.of_column_pair`, `.of_table_columns` | no |
+| `plotseries.point_count`, `.is_consistent`, `.x_extent`, `.y_extent`, `.mark_name`, `.kind_name` | no |
+| `plotseries.bin_edges`, `.bin_counts` | no |
+| `plotaxis.linear`, `.log10`, `.categorical`, and the five `with_` options | no |
+| `plotaxis.is_auto_range`, `.padded_range`, `.ticks_for`, `.ticks_of`, `.tick`, `.nice_number` | no |
+| `plotaxis.position`, `.value_at`, `.range_is_valid`, `.format_value`, `.auto_format` | no |
+| `plotfigure.figure`, `.single`, `.axes`, `.grid`, `.add_axes`, `.add_series` | no |
+| `plotfigure.with_title`, `.with_background`, `.with_axes_title`, `.with_legend`, `.with_gutters`, `.placed_at` | no |
+| `plotfigure.legend_at`, `.no_legend`, `.box_of`, `.plot_area_of`, `.data_to_figure`, `.resolved`, `.validate` | no |
+| `plotdraw.render`, `.render_axes`, `.render_series`, `.op_count` | no |
+| `plotdraw.op_name`, `.op_bounds`, `.ops_bounds`, `.ops_in_group`, `.group_ids` | no |
+| `plotdraw.circle_as_polygon`, `.dash_polyline` | no |
+| `plotsvg.to_svg`, `.to_svg_string`, `.ops_to_svg`, `.ops_to_svg_with_font`, `.op_to_nodes`, `.anchor_to_svg` | no |
+| `plotraster.to_image`, `.ops_to_image`, `.ops_onto`, `.pixel_size`, `.scanline_coverage`, `.blend` | no |
+| `plotfault`'s five variants, `.summary` and its `Error` implementation | no |
 
-Coordinates are **figure coordinates**: y grows down from the top left,
-in the figure's own units. Not data coordinates — the scales have
-already been applied — and not pixels, because the figure does not know
-how big the drawing is. `plotraster` multiplies by its scale; `plotsvg`
-writes them as user units under a matching `viewBox`.
+## Licence
 
-`PlotAnchor` is this package's own rather than svg-nv's
-`SvgTextAnchor`, and `PlotRun` rather than `SvgSubpath`, for one reason:
-an op list must not carry a type from one of its three backends, or the
-canvas replay — which wants nothing to do with SVG — would take svg-nv
-into its dependency closure to read an enum.
+Apache-2.0. See `LICENSE`.
 
-## Tick placement is a named algorithm
-
-"Pick some round numbers" is where every plotting library quietly
-differs from every other, and it is the first thing a reader of a chart
-notices: labels at 0, 2.5, 5, 7.5, 10 read well and labels at 0, 2.857,
-5.714 do not. So the rule is a **value** — `PlotTickRule` — that a caller
-can name, compare and test.
-
-The default is **Heckbert's**: the loose-label algorithm from "Nice
-Numbers for Graph Labels" (Graphics Gems I, 1990). Take the range,
-divide by the number of ticks wanted, round that spacing up to the
-nearest 1, 2, 5 or 10 times a power of ten, place ticks at multiples of
-it. Twenty lines, no tables, and the answer is a number a person would
-have chosen — it is what gnuplot, plotters and matplotlib's
-`MaxNLocator` each do a version of. The suite's cases are Heckbert's own
-worked examples.
-
-**Talbot, Lin and Hanrahan's extended Wilkinson algorithm is deliberately
-not here.** It scores candidate tick sets on simplicity, coverage,
-density and legibility and produces better axes on awkward ranges, at
-the cost of a search. It belongs here eventually, as a fifth variant
-named after it — which is why `PlotTickRule` is an enum and not a
-boolean.
-
-Histogram binning is the same shape: `PlotBinsSturges` and
-`PlotBinsFreedmanDiaconis` are numpy's rules under their own names,
-because the same data binned by the two can look unimodal or bimodal,
-and a caller should be able to say which picture they are looking at.
-
-## What it ports
-
-[plotters](https://github.com/plotters-rs/plotters) for the backend
-split and the series set, and the
-[matplotlib](https://matplotlib.org/) subset a notebook corpus actually
-contains for the API. Four series kinds — line, scatter, bar, histogram
-— is a measurement, not a shortlist: the long tail after them (box,
-violin, heatmap, contour, error bars, stacked areas, pie) is each a
-different layout problem rather than a variation on these, and each is a
-variant here plus a branch in `plotdraw` when someone needs it.
-
-## Two things this package does not do, and says so
-
-**There is no layout engine.** matplotlib's `tight_layout` measures every
-tick label and title and solves for margins that fit them — which needs
-text metrics, which need a font file, which needs a filesystem. This
-package is `core` and has none. So an axes is placed by **fractions** of
-the figure (matplotlib's `add_axes` rectangle), `plotfigure.grid`
-computes those fractions for a regular grid of subplots, and the gutters
-are fractions a caller can set from its own measurements. The upside is
-that a figure is resolution-independent by construction: the same value
-renders at 640 pixels and at 1920 with every axes in the same relative
-place.
-
-**There is no rasteriser yet.** `plotraster`'s target is a scanline
-rasteriser with analytic coverage — stb_truetype's and tiny-skia's
-approach, which antialiases without supersampling. `raster-nv` is the
-plan's row for that work as a package of its own (P2); until it lands
-this module carries it, and when it lands this module becomes a caller
-of it **with no change to the interface below**.
-`plotraster.scanline_coverage` is the seam, and it is public because it
-is the thing to test.
-
-## A null is a gap, not a zero
-
-`plotseries.of_column` drops the positions a dataframe column marks
-absent, and a line series drawn from one is broken there rather than
-joined across it — because a line that bridges a gap asserts data that is
-not in the frame. That is matplotlib's behaviour for a masked array and
-pandas's for a NaN.
-
-The consequence is that the result can be shorter than the column, so
-pairing two columns uses `of_column_pair`, which drops a row when
-**either** side is null and keeps the two aligned. Two separate
-`of_column` calls on columns with nulls in different places give lists of
-different lengths and silently shift every point after the first gap —
-which is the bug that function exists to make unavailable.
-
-## Related
-
-- [`geometry-nv`](https://github.com/novolang/geometry-nv) — the
-  rectangles and transforms a figure is laid out with
-- [`svg-nv`](https://github.com/novolang/svg-nv) — the first backend
-- [`ndarray-nv`](https://github.com/novolang/ndarray-nv) and
-  [`dataframe-nv`](https://github.com/novolang/dataframe-nv) — the input
-- [`image-nv`](https://github.com/novolang/image-nv) — the raster target
-- [Publishing a package to Orbit](https://novo-lang.org/publishing) —
-  the layer rules this package is held to
+<!-- docs/writing-a-readme.md is the style guide for this page. -->
