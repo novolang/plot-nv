@@ -52,6 +52,6 @@ svg-nv       = "^0.0.1"
 # caller encodes it with png-nv or writes it somewhere.  Every one of
 # them is `core`, so this package still is.
 ndarray-nv   = "^0.0.1"
-dataframe-nv = "^0.0.1"
+dataframe-nv = "^0.0.4"
 color-nv     = "^0.0.1"
 image-nv     = "^0.0.1"

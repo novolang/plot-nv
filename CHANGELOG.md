@@ -12,6 +12,10 @@ which dataframe-nv requires and which does not build with novo 0.10.0.
 The lock now names csv-nv 0.1.4, the first release that builds.  No
 requirement in the manifest changed, and every body is still `todo()`.
 
+The dataframe-nv requirement is `^0.0.4`, the release that builds on
+csv-nv 0.2.0 under toolchain 0.11; a caret on a 0.0.x version names
+that exact release, so the range had to move for the lock to follow.
+
 ## 0.0.2 — 2026-09-15
 
 README rewritten to the package README style guide (docs/writing-a-readme.md); no change to the interface.

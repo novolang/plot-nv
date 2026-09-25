@@ -10,16 +10,16 @@ hash = "4ce79b7326161164055faeb5c8abec5e1fccb898409318b66c753e3f312e3f8b"
 [csv-nv]
 source = "registry"
 url = "https://registry.novo-lang.org"
-req = "^0.1.1"
-version = "0.1.4"
-hash = "c07c322ef1923748b14e94a58c62df3e8fe5d94de1e36bc365cefa323adb94d9"
+req = "^0.2.0"
+version = "0.2.0"
+hash = "f68b37ade5526f18f44b0d8c29757d5516f8c9de90e143b269100f369088b092"
 
 [dataframe-nv]
 source = "registry"
 url = "https://registry.novo-lang.org"
-req = "^0.0.1"
-version = "0.0.1"
-hash = "b66a8e5188188b828863837403a1753b354438e4bc713cebc09e55241b40423d"
+req = "^0.0.4"
+version = "0.0.4"
+hash = "f8e94b0ef254ecedd9960f78957056ae3048aa580d99f2509d87b0d79bea5d82"
 
 [flate-nv]
 source = "registry"
